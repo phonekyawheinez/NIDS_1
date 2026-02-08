@@ -1,71 +1,89 @@
-"""
-PySpark Analysis - Part 3: Multi-class Classification (20 marks)
-Task 3.2b: Multi-class Classifier for 10 Categories
-(1 Normal + 9 Attack Types)
-"""
+
 import os
+import sys
+import json
 import warnings
+from pathlib import Path
+
 warnings.filterwarnings('ignore')
 
-# Windows compatibility fix for PySpark
-import sys
+# ============================================================================
+# 1. WINDOWS & JAVA 17 COMPATIBILITY SETUP (CRITICAL FIX)
+# ============================================================================
+# Update these paths to match your actual installation folders
+os.environ['JAVA_HOME'] = r"C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot"
+os.environ['SPARK_HOME'] = r"C:\Spark"
+os.environ['HADOOP_HOME'] = r"C:\hadoop"
+
+# Manually update PATH to ensure Java 17 is used over newer versions
+os.environ['PATH'] = (
+    os.path.join(os.environ['JAVA_HOME'], 'bin') + os.pathsep +
+    os.path.join(os.environ['SPARK_HOME'], 'bin') + os.pathsep +
+    os.path.join(os.environ['HADOOP_HOME'], 'bin') + os.pathsep +
+    os.environ['PATH']
+)
+
+# Ensure PySpark uses your project's virtual environment python
+os.environ['PYSPARK_PYTHON'] = sys.executable
+os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
+
+# Windows socket fix
 if sys.platform == "win32":
     import socketserver
-    # Add missing UnixStreamServer for Windows compatibility
     if not hasattr(socketserver, 'UnixStreamServer'):
         socketserver.UnixStreamServer = socketserver.TCPServer
 
-# Initialize findspark for Windows compatibility
 import findspark
 findspark.init()
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when
+from pyspark.sql.functions import col, when, trim, regexp_replace
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType, LongType
 from pyspark.ml.feature import VectorAssembler, StandardScaler, StringIndexer
-from pyspark.ml.classification import RandomForestClassifier, DecisionTreeClassifier
+from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from pyspark.ml import Pipeline
 
 import pandas as pd
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pathlib import Path
 from sklearn.metrics import confusion_matrix, classification_report
 
-# Setup
-plt.style.use('seaborn-v0_8-darkgrid')
-sns.set_palette("husl")
-output_dir = Path('./results/pyspark_results')
-output_dir.mkdir(exist_ok=True)
-
-print("=" * 80)
-print("PART 3: MULTI-CLASS CLASSIFICATION (20 MARKS)")
-print("10 Categories: 1 Normal + 9 Attack Types")
-print("=" * 80)
-
 # ============================================================================
-# INITIALIZE SPARK
+# 2. INITIALIZE SPARK (WITH JAVA 17 OPEN-ARGS)
 # ============================================================================
-print("\n[1/7] Initializing Spark Session...")
+print("\n[1/8] Initializing Spark Session (32GB RAM Optimized)...")
 
 spark = SparkSession.builder \
     .appName("Multi-class Classification") \
-    .config("spark.driver.memory", "4g") \
-    .config("spark.executor.memory", "4g") \
-    .config("spark.sql.shuffle.partitions", "8") \
+    .config("spark.driver.memory", "16g") \
+    .config("spark.executor.memory", "16g") \
+    .config("spark.memory.offHeap.enabled", "true") \
+    .config("spark.memory.offHeap.size", "4g") \
+    .config("spark.sql.shuffle.partitions", "32") \
+    .config("spark.driver.maxResultSize", "4g") \
+    .config("spark.driver.extraJavaOptions",
+            "--add-opens=java.base/java.lang=ALL-UNNAMED " +
+            "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED " +
+            "--add-opens=java.base/java.net=ALL-UNNAMED " +
+            "--add-opens=java.base/java.util=ALL-UNNAMED") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("ERROR")
 print(f"✓ Spark Version: {spark.version}")
 
+# Setup results directory
+output_dir = Path('../results/pyspark_results')
+output_dir.mkdir(exist_ok=True, parents=True)
+
+# ... [KEEP YOUR DATA LOADING AND PROCESSING CODE HERE AS IS] ...
 # ============================================================================
 # LOAD DATA
 # ============================================================================
-print("\n[2/7] Loading Dataset...")
+print("\n[2/8] Loading Dataset...")
 
 schema = StructType([
     StructField("srcip", StringType(), True), StructField("sport", IntegerType(), True),
@@ -95,7 +113,7 @@ schema = StructType([
     StructField("label", IntegerType(), True)
 ])
 
-df = spark.read.csv('file:///' + os.path.abspath('./data/UNSW-NB15.csv'), header=False, schema=schema)
+df = spark.read.csv('file:///' + os.path.abspath('data/UNSW-NB15.csv'), header=False, schema=schema)
 df = df.na.fill(0)
 
 # Clean attack_cat field - remove leading/trailing spaces and standardize categories
@@ -118,7 +136,7 @@ print("✓ Cleaned attack_cat field (removed leading/trailing spaces)")
 # ============================================================================
 # PREPARE MULTI-CLASS LABELS
 # ============================================================================
-print("\n[3/7] Preparing Multi-class Labels...")
+print("\n[3/8] Preparing Multi-class Labels...")
 
 # Map attack categories (label=0 becomes "Normal", others keep their attack_cat)
 df_multiclass = df.withColumn(
@@ -129,8 +147,13 @@ df_multiclass = df.withColumn(
 # Check class distribution
 print("\n--- Class Distribution ---")
 class_dist = df_multiclass.groupBy("attack_category").count().orderBy(col("count").desc())
-class_dist_pd = class_dist.toPandas()
+# class_dist_pd = class_dist.toPandas()
+# print(class_dist_pd.to_string(index=False))
+
+top100 = class_dist.limit(100)
+class_dist_pd = top100.toPandas()
 print(class_dist_pd.to_string(index=False))
+
 
 # Visualization 1: Class Distribution
 fig, ax = plt.subplots(figsize=(12, 8))
@@ -168,7 +191,7 @@ print(f"✓ Classes: {', '.join(label_to_class)}")
 # ============================================================================
 # PREPARE FEATURES
 # ============================================================================
-print("\n[4/7] Preparing Features...")
+print("\n[4/8] Preparing Features...")
 
 feature_columns = ['dur', 'sbytes', 'dbytes', 'sttl', 'dttl', 'sloss', 'dloss',
                    'sload', 'dload', 'spkts', 'dpkts', 'swin', 'dwin',
@@ -191,19 +214,21 @@ print(f"✓ Test set: {test_count:,} records")
 # ============================================================================
 # TRAIN RANDOM FOREST (MULTI-CLASS)
 # ============================================================================
-print("\n[5/7] Training Random Forest Classifier...")
+print("\n[5/8] Training Random Forest Classifier...")
 
 rf_multi = RandomForestClassifier(
     featuresCol="features",
     labelCol="class_label",
-    numTrees=100,
-    maxDepth=10,
-    seed=42
+    numTrees=100,      # Back to full power
+    maxDepth=9,        # Increased depth for better accuracy (10 is often the "danger zone")
+    maxBins=64,        # More bins for better feature splitting
+    seed=42,
+    cacheNodeIds=True  # Optimization to reduce repeated memory lookups
 )
 
 pipeline_rf = Pipeline(stages=[assembler, scaler, rf_multi])
 
-print("   Training model (this may take several minutes)...")
+print("   Training model (using high-RAM configuration)...")
 model_rf = pipeline_rf.fit(train_data)
 print("✓ Model trained successfully")
 
@@ -214,7 +239,7 @@ predictions_rf.cache()
 # ============================================================================
 # EVALUATE MODEL
 # ============================================================================
-print("\n[6/7] Evaluating Model Performance...")
+print("\n[6/8] Evaluating Model Performance...")
 
 evaluator_acc = MulticlassClassificationEvaluator(
     labelCol="class_label", predictionCol="prediction", metricName="accuracy"
@@ -248,7 +273,7 @@ y_pred = pred_data['prediction'].values.astype(int)
 # ============================================================================
 # VISUALIZATIONS
 # ============================================================================
-print("\n[7/7] Creating Visualizations...")
+print("\n[7/8] Creating Visualizations...")
 
 # Confusion Matrix
 cm = confusion_matrix(y_true, y_pred)
@@ -451,6 +476,55 @@ print("  9. multiclass_metrics.csv")
 print(" 10. multiclass_class_distribution.csv")
 print("\n✓ Total: 10 files generated")
 print("=" * 80)
+# ============================================================================
+# [UPDATED] SAVE MODEL & LABELS
+# ============================================================================
+# ============================================================================
+# [8/8] SAVING MODEL & LABELS - BULLETPROOF WINDOWS VERSION
+# ============================================================================
+
+
+# Release memory from the huge dataset before trying to write the model to disk
+train_data.unpersist()
+test_data.unpersist()
+
+print("\n[8/8] Force Saving Model to Project 'saved_models' Folder...")
+
+# 1. SET THE TARGET PATH MANUALLY
+# This matches your screenshot structure
+# project_root = r"C:\Users\Asus\PycharmProjects\Ids_v1\Big-Data-Analytics-CN-7031"
+# target_dir = os.path.join(project_root, "saved_models")
+# model_path = os.path.join(target_dir, "nids_multiclass_model")
+# labels_path = os.path.join(target_dir, "label_mapping.json")
+
+# Get the directory where this script lives
+project_root = Path(__file__).resolve().parent.parent  # adjust levels as needed
+
+# Build relative paths
+target_dir = project_root / "saved_models"
+model_path = target_dir / "nids_multiclass_model"
+labels_path = target_dir / "label_mapping.json"
+
+# Make sure the folder exists
+target_dir.mkdir(parents=True, exist_ok=True)
+
+# 2. CREATE FOLDER IF MISSING
+try:
+    # 3. SAVE USING SPARK
+    # Convert to Spark-friendly URI format
+    spark_path = "file:///" + str(model_path).replace("\\", "/")
+
+    print(f"Writing to: {model_path}...")
+    model_rf.write().overwrite().save(spark_path)
+
+    # 4. SAVE LABELS
+    with open(labels_path, "w") as f:
+        json.dump(list(label_to_class), f)
+
+    print("✓ Model and Labels saved successfully.")
+    print("Please refresh your PyCharm file tree now!")
+
+except Exception as e:
+    print(f"❌ Save Failed: {e}")
 
 spark.stop()
-print("\n✓ Spark session closed")

@@ -14,7 +14,7 @@ plt.rcParams['figure.figsize'] = (12, 8)
 plt.rcParams['font.size'] = 11
 
 # Create output directory for plots
-output_dir = Path('./results/hive_visualizations')
+output_dir = Path('../results/hive_visualizations')
 output_dir.mkdir(exist_ok=True)
 
 print("=" * 60)
@@ -28,7 +28,7 @@ print("\n[1/4] Processing Query 1: Attack Distribution Analysis...")
 
 # Read Query 1 data
 q1_df = pd.read_csv(
-    './results/hive_results/query1/000000_0',
+    '../results/hive_results/query1/000000_0',
     names=['traffic_type', 'attack_cat', 'count', 'avg_duration', 'avg_src_bytes', 'avg_dst_bytes']
 )
 
@@ -123,7 +123,7 @@ print("\n[2/4] Processing Query 2: Protocol Analysis...")
 
 # Read Query 2 data
 q2_df = pd.read_csv(
-    './results/hive_results/query2/000000_0',
+    '../results/hive_results/query2/000000_0',
     names=['protocol', 'service_type', 'connection_count', 'attack_count', 'attack_percentage', 'avg_total_bytes']
 )
 
@@ -227,7 +227,7 @@ print("\n[3/4] Processing Query 4: Connection State Analysis...")
 
 # Read Query 4 data
 q4_df = pd.read_csv(
-    './results/hive_results/query4/000000_0',
+    '../results/hive_results/query4/000000_0',
     names=['state', 'total_connections', 'avg_src_bytes', 'stddev_src_bytes',
            'min_src_bytes', 'max_src_bytes', 'median_src_bytes', 'avg_duration', 'attack_count']
 )

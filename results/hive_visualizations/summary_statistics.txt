@@ -4,9 +4,9 @@ HIVE QUERY ANALYSIS - SUMMARY STATISTICS
 
 QUERY 1: ATTACK DISTRIBUTION ANALYSIS
 ----------------------------------------------------------------------
-Total Records Analyzed: 2,539,739
-Normal Traffic Records: 2,218,456 (87.35%)
-Attack Traffic Records: 321,283 (12.65%)
+Total Records Analyzed: 321,283
+Normal Traffic Records: 0 (0.00%)
+Attack Traffic Records: 321,283 (100.00%)
 Number of Attack Categories: 9
 Most Common Attack: Analysis
   - Count: 2,677
@@ -26,5 +26,5 @@ Average Connection Duration: 5.1490 seconds
 
 ======================================================================
 All visualizations have been saved to:
-results\hive_visualizations
+..\results\hive_visualizations
 ======================================================================

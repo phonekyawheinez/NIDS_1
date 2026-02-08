@@ -1,9 +1,7 @@
-"""
-PySpark Analysis - Part 1: Statistical Analysis (15 marks)
-Task 3.1: Analyze and Interpret Big Data
-"""
+
 import os
 import warnings
+import pandas as pd
 warnings.filterwarnings('ignore')
 
 # Windows compatibility fix for PySpark
@@ -33,11 +31,11 @@ from pathlib import Path
 # Setup
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
-output_dir = Path('./results/pyspark_results')
+output_dir = Path('results') / 'pyspark_results'
 output_dir.mkdir(exist_ok=True)
 
 print("=" * 80)
-print("PART 1: STATISTICAL ANALYSIS (15 MARKS)")
+print("STATISTICAL ANALYSIS (15 MARKS)")
 print("=" * 80)
 
 # ============================================================================
@@ -120,7 +118,7 @@ schema = StructType([
 
 # Get absolute path for the CSV file
 import os
-csv_path = os.path.abspath('./data/UNSW-NB15.csv')
+csv_path = os.path.abspath('data/UNSW-NB15.csv')
 
 df = spark.read.csv(
     csv_path,
@@ -254,7 +252,11 @@ feature_cols = ['dur', 'sbytes', 'dbytes', 'spkts', 'dpkts',
 
 # Sample 10% for performance
 print("   Sampling 10% of data for correlation analysis...")
-sample_df = df.select(feature_cols).sample(fraction=0.1, seed=42).toPandas()
+# sample_df = df.select(feature_cols).sample(fraction=0.1, seed=42).toPandas()
+
+
+sample_rows = df.select(feature_cols).sample(fraction=0.1, seed=42).limit(100000).collect()
+sample_df = pd.DataFrame([r.asDict() for r in sample_rows])
 
 # Calculate correlation matrix
 corr_matrix = sample_df.corr()
@@ -305,7 +307,12 @@ print("✓ Saved: stats_feature_distributions.png")
 # Attack Category Distribution
 print("\n   Analyzing attack categories...")
 attack_cat_dist = df.filter(col('label') == 1).groupBy('attack_cat').count().orderBy(col('count').desc())
-attack_cat_pd = attack_cat_dist.toPandas()
+# attack_cat_pd = attack_cat_dist.toPandas()
+
+# Spark DataFrame -> collect -> pandas DataFrame (no toPandas required)
+rows = attack_cat_dist.collect()
+attack_cat_pd = pd.DataFrame([r.asDict() for r in rows])
+
 
 # Visualization 5: Attack Category Distribution
 fig, ax = plt.subplots(figsize=(12, 8))

@@ -6,7 +6,6 @@ Fuzzers,24246
 DoS,16353
 Reconnaissance,13987
 Analysis,2677
-Backdoor,1795
+Backdoor,2329
 Shellcode,1511
-Backdoors,534
 Worms,174

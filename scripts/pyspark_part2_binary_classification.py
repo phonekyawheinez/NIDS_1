@@ -1,9 +1,7 @@
-"""
-PySpark Analysis - Part 2: Binary Classification (15 marks)
-Task 3.2a: Design and Build a Binary Classifier
-"""
+
 import os
 import warnings
+
 warnings.filterwarnings('ignore')
 
 # Windows compatibility fix for PySpark
@@ -38,11 +36,11 @@ from sklearn.metrics import confusion_matrix, classification_report, roc_curve, 
 # Setup
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
-output_dir = Path('./results/pyspark_results')
+output_dir = Path('results/pyspark_results')
 output_dir.mkdir(exist_ok=True)
 
 print("=" * 80)
-print("PART 2: BINARY CLASSIFICATION (15 MARKS)")
+print("BINARY CLASSIFICATION (15 MARKS)")
 print("Normal vs Attack Detection")
 print("=" * 80)
 
@@ -94,7 +92,7 @@ schema = StructType([
     StructField("label", IntegerType(), True)
 ])
 
-df = spark.read.csv('file:///' + os.path.abspath('./data/UNSW-NB15.csv'), header=False, schema=schema)
+df = spark.read.csv('file:///' + os.path.abspath('data/UNSW-NB15.csv'), header=False, schema=schema)
 df = df.na.fill(0)  # Fill nulls
 
 # Clean attack_cat field - remove leading/trailing spaces and standardize categories
