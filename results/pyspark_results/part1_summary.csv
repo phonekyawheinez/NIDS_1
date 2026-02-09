@@ -1,2 +1,3 @@
-Total Records,Normal Traffic,Attack Traffic,Normal %,Attack %,Number of Features,Number of Attack Categories
-2539739,2218456,321283,87.35,12.65,49,9
+version https://git-lfs.github.com/spec/v1
+oid sha256:11a548296e384d4682ee288da6bce63de70c09a9f4d12b4ee4f04c143597447b
+size 151

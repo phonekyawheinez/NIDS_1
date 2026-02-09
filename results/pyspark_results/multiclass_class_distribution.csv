@@ -1,11 +1,3 @@
-attack_category,count
-Normal,2218456
-Generic,215481
-Exploits,44525
-Fuzzers,24246
-DoS,16353
-Reconnaissance,13987
-Analysis,2677
-Backdoor,2329
-Shellcode,1511
-Worms,174
+version https://git-lfs.github.com/spec/v1
+oid sha256:0eb7b30d0d5b640b16d4b1377bc5b0f915f9cbf1d16b94ec04194d6358a7c7c9
+size 176

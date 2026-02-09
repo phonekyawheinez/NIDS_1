@@ -1,8 +1,3 @@
-Metric,Value
-Accuracy,0.9773481272508058
-Weighted Precision,0.978699557691258
-Weighted Recall,0.9773481272508057
-Weighted F1-Score,0.9724050688957351
-Number of Classes,10.0
-Training Samples,1778345.0
-Testing Samples,761394.0
+version https://git-lfs.github.com/spec/v1
+oid sha256:b5413b5307e33a0934daf3ff967eae0a67c65fd713d8b279904b9143f2d66e38
+size 233
