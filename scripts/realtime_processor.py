@@ -2,192 +2,143 @@ import os
 import sys
 import json
 import shutil
-import glob
-import findspark
-
-# ============================================================================
-# 1. WINDOWS & SPARK ENVIRONMENT SETUP (PATH SANITIZATION)
-# ============================================================================
-# Use 'r' before strings to handle Windows backslashes correctly.
-# DOUBLE CHECK these folders in File Explorer!
-os.environ['JAVA_HOME'] = r"C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot"
-os.environ['SPARK_HOME'] = r"C:\Spark"
-os.environ['HADOOP_HOME'] = r"C:\hadoop"
-
-# Force add the BIN folders to the PATH so Windows can find java.exe and winutils.exe
-os.environ['PATH'] = (
-    os.path.join(os.environ['JAVA_HOME'], 'bin') + os.pathsep +
-    os.path.join(os.environ['SPARK_HOME'], 'bin') + os.pathsep +
-    os.path.join(os.environ['HADOOP_HOME'], 'bin') + os.pathsep +
-    os.environ['PATH']
-)
-
-# Ensure Spark uses your PyCharm Virtual Environment's Python
-os.environ['PYSPARK_PYTHON'] = sys.executable
-os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
-
-# Manually link Python libraries
-sys.path.append(os.path.join(os.environ['SPARK_HOME'], 'python'))
-
-try:
-    # Auto-detect the py4j zip version
-    py4j_zip = glob.glob(os.path.join(os.environ['SPARK_HOME'], 'python', 'lib', 'py4j-*.zip'))[0]
-    sys.path.append(py4j_zip)
-    print(f"✓ Successfully linked: {os.path.basename(py4j_zip)}")
-except IndexError:
-    print(r"Error: Could not find py4j zip file in C:\Spark\python\lib")
-    sys.exit(1)
-
-# Initialize findspark ONLY after paths are set
-findspark.init()
-
 from pyspark.sql import SparkSession
-# ... rest of your imports
 from pyspark.ml import PipelineModel
-from pyspark.sql.functions import from_json, col, udf, current_timestamp, split , create_map, lit
-from pyspark.sql.types import StructType, StructField, IntegerType, FloatType, StringType
+from pyspark.sql.functions import from_json, col, udf, current_timestamp, lit, create_map
+from pyspark.sql.types import StructType, StructField, IntegerType, FloatType, StringType, DoubleType, LongType
 from itertools import chain
 
-# Windows compatibility fix for socket streaming
-if sys.platform == "win32":
-    import socketserver
-    if not hasattr(socketserver, 'UnixStreamServer'):
-        socketserver.UnixStreamServer = socketserver.TCPServer
-
 # ============================================================================
-# 2. INITIALIZE SPARK
+# 1. INITIALIZE SPARK (DOCKER OPTIMIZED)
 # ============================================================================
-# Remove the 'extraJavaOptions' that caused the crash
+# No need for manual ENV paths; Dockerfile handles JAVA_HOME and SPARK_HOME.
 spark = SparkSession.builder \
-    .appName("NIDS_RealTime") \
-    .config("spark.driver.memory", "2g") \
+    .appName("NIDS_Zeek_Processor") \
+    .config("spark.driver.memory", "1g") \
+    .config("spark.sql.shuffle.partitions", "2") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("ERROR")
 
 # ============================================================================
-# 3. LOAD MODEL & LABELS
+# 2. LOAD MODEL & LABELS
 # ============================================================================
-# Ensure these paths point to where your Part 3 script saved the outputs
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# In Docker, we map volumes to /app/saved_models
+BASE_DIR = "/app"
+MODEL_PATH = os.path.join(BASE_DIR, "saved_models", "nids_multiclass_model")
+LABELS_PATH = os.path.join(BASE_DIR, "saved_models", "label_mapping.json")
 
-# Build the absolute path to the model (going up one level from scripts to root)
-MODEL_PATH = os.path.join(SCRIPT_DIR, "..", "saved_models", "nids_multiclass_model")
-LABELS_PATH = os.path.join(SCRIPT_DIR, "..", "saved_models", "label_mapping.json")
-
-# Convert to a format Spark likes for Windows (replacing \ with /)
-MODEL_PATH = MODEL_PATH.replace("\\", "/")
-
-print(f"Loading model from: {MODEL_PATH}")
+print(f"📥 Loading model from: {MODEL_PATH}")
 
 try:
     model = PipelineModel.load(MODEL_PATH)
     with open(LABELS_PATH, "r") as f:
         labels_list = json.load(f)
 
-    # Create a native Spark Map: {0: "Normal", 1: "Generic", ...}
+    # Create label map for converting prediction index (0,1,2) to text ("Normal", "Exploit")
     label_map = create_map([lit(x) for x in chain(*enumerate(labels_list))])
-    print("✓ Model and native label map loaded successfully.")
+    print("✓ Model loaded successfully.")
 except Exception as e:
     print(f"❌ Error loading model: {e}")
     sys.exit(1)
 
-# UDF to map numeric prediction back to category name (e.g., 0 -> "Normal")
-get_label_udf = udf(lambda x: labels_list[int(x)] if x is not None else "Unknown", StringType())
-
 # ============================================================================
-# 4. DATA SCHEMA (26 features matching your Part 3 training)
+# 3. DEFINE ZEEK LOG SCHEMA
 # ============================================================================
-schema = StructType([
-    StructField("dur", FloatType(), True),
-    StructField("sbytes", IntegerType(), True),
-    StructField("dbytes", IntegerType(), True),
-    StructField("sttl", IntegerType(), True),
-    StructField("dttl", IntegerType(), True),
-    StructField("sloss", IntegerType(), True),
-    StructField("dloss", IntegerType(), True),
-    StructField("sload", FloatType(), True),
-    StructField("dload", FloatType(), True),
-    StructField("spkts", IntegerType(), True),
-    StructField("dpkts", IntegerType(), True),
-    StructField("swin", IntegerType(), True),
-    StructField("dwin", IntegerType(), True),
-    StructField("smeansz", IntegerType(), True),
-    StructField("dmeansz", IntegerType(), True),
-    StructField("trans_depth", IntegerType(), True),
-    StructField("res_bdy_len", IntegerType(), True),
-    StructField("sjit", FloatType(), True),
-    StructField("djit", FloatType(), True),
-    StructField("stime", FloatType(), True),
-    StructField("ltime", FloatType(), True),
-    StructField("sintpkt", FloatType(), True),
-    StructField("dintpkt", FloatType(), True),
-    StructField("tcprtt", FloatType(), True),
-    StructField("synack", FloatType(), True),
-    StructField("ackdat", FloatType(), True),
-    StructField("is_sm_ips_ports", IntegerType(), True),
-    StructField("ct_state_ttl", IntegerType(), True),
-    StructField("ct_flw_http_mthd", IntegerType(), True)
+# This matches the JSON output from Zeek's conn.log
+zeek_schema = StructType([
+    StructField("ts", DoubleType(), True),
+    StructField("uid", StringType(), True),
+    StructField("id.orig_h", StringType(), True),
+    StructField("id.orig_p", LongType(), True),
+    StructField("id.resp_h", StringType(), True),
+    StructField("id.resp_p", LongType(), True),
+    StructField("proto", StringType(), True),
+    StructField("service", StringType(), True),
+    StructField("duration", DoubleType(), True),
+    StructField("orig_bytes", LongType(), True),
+    StructField("resp_bytes", LongType(), True),
+    StructField("conn_state", StringType(), True),
+    StructField("orig_pkts", LongType(), True),
+    StructField("resp_pkts", LongType(), True)
 ])
 
 # ============================================================================
-# 5. STREAMING PIPELINE
+# 4. STREAMING INPUT (FROM ZEEK LOGS)
 # ============================================================================
-print("📡 Waiting for sniffer stream on localhost:9999...")
+print("📡 Monitoring /app/zeek_logs for new connection logs...")
 
-raw_stream = spark.readStream \
-    .format("socket") \
-    .option("host", "localhost") \
-    .option("port", 8888) \
-    .load()
+# Read JSON files as they appear in the folder
+input_df = spark.readStream \
+    .format("json") \
+    .schema(zeek_schema) \
+    .option("maxFilesPerTrigger", 1) \
+    .load("/app/zeek_logs/")  # This folder is mounted in docker-compose
 
-# Parse JSON strings coming from the sniffer script
-json_stream = raw_stream.select(from_json(col("value"), schema).alias("data")).select("data.*")
-json_stream = json_stream.na.fill(0)
+# ============================================================================
+# 5. FEATURE MAPPING (Zeek -> ML Model)
+# ============================================================================
+# We map available Zeek columns to the features your model expects.
+# MISSING FEATURES are filled with 0 to prevent crashes.
+processed_df = input_df \
+    .withColumn("dur", col("duration").cast(FloatType())) \
+    .withColumn("sbytes", col("orig_bytes").cast(IntegerType())) \
+    .withColumn("dbytes", col("resp_bytes").cast(IntegerType())) \
+    .withColumn("spkts", col("orig_pkts").cast(IntegerType())) \
+    .withColumn("dpkts", col("resp_pkts").cast(IntegerType())) \
+    .withColumn("proto_str", col("proto")) \
+    .na.fill(0)  # Handle nulls if Zeek doesn't record bytes/duration
 
-# Apply the machine learning model to the live stream
-predictions = model.transform(json_stream)
+# Fill missing columns that the model expects but Zeek doesn't provide by default
+# (These would require a custom Zeek script to calculate)
+missing_cols = [
+    "sttl", "dttl", "sloss", "dloss", "sload", "dload", "swin", "dwin",
+    "smeansz", "dmeansz", "trans_depth", "res_bdy_len", "sjit", "djit",
+    "stime", "ltime", "sintpkt", "dintpkt", "tcprtt", "synack", "ackdat",
+    "is_sm_ips_ports", "ct_state_ttl", "ct_flw_http_mthd"
+]
 
-# Format the results for the Streamlit dashboard
+for c in missing_cols:
+    processed_df = processed_df.withColumn(c, lit(0).cast(IntegerType()))
+
+# ============================================================================
+# 6. PREDICTION & OUTPUT
+# ============================================================================
+# Apply the model
+predictions = model.transform(processed_df)
+
+# Select columns for the Dashboard
 final_stream = predictions.select(
     current_timestamp().alias("timestamp"),
+    col("id.orig_h").alias("src_ip"),
+    col("id.resp_h").alias("dst_ip"),
     col("sbytes"),
-    col("sttl"),
-    # Map the numeric prediction directly without using a UDF
-    # label_map.getItem(col("prediction").cast("integer")).alias("attack_type")
+    col("dbytes"),
+    col("dur"),
+    # Map prediction index to human-readable string
     label_map.getItem(col("prediction").cast("integer")).alias("attack_type")
 )
-# Clean folders from previous runs to avoid state conflicts
-# ============================================================================
-# 6. WORKSPACE CLEANUP (STABLE VERSION)
-# ============================================================================
-output_path = "../stream_output"
-checkpoint_path = "../stream_checkpoint"
 
-def safe_cleanup(path):
-    """Deletes contents of a folder without deleting the folder itself."""
-    if os.path.exists(path):
-        print(f"🧹 Attempting to clean: {path}")
-        for filename in os.listdir(path):
-            file_path = os.path.join(path, filename)
-            try:
-                if os.path.isfile(file_path) or os.path.islink(file_path):
-                    os.unlink(file_path)  # Delete individual file
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path) # Delete sub-folders
-            except Exception as e:
-                # If Streamlit is using a file, we skip it instead of crashing
-                print(f"⚠️ Skipping busy file (being used by Dashboard): {filename}")
+# Output Setup
+output_path = "/app/stream_output"
+checkpoint_path = "/app/stream_checkpoint"
 
-# Run the safe cleanup on both folders
-safe_cleanup(output_path)
-safe_cleanup(checkpoint_path)
+# Ensure clean start
+if os.path.exists(output_path):
+    try:
+        shutil.rmtree(output_path)
+    except:
+        pass
 
-# Ensure folders exist before Spark starts
-os.makedirs(output_path, exist_ok=True)
-os.makedirs(checkpoint_path, exist_ok=True)
+if os.path.exists(checkpoint_path):
+    try:
+        shutil.rmtree(checkpoint_path)
+    except:
+        pass
 
-# Write the predictions to JSON files for the dashboard to read
+print("🚀 Starting Stream Processing...")
+
+# Write results to JSON for the Dashboard to read
 query = final_stream.writeStream \
     .format("json") \
     .option("path", output_path) \
@@ -195,5 +146,4 @@ query = final_stream.writeStream \
     .outputMode("append") \
     .start()
 
-print("🚀 Real-time analysis active. Open your Dashboard now.")
 query.awaitTermination()

@@ -22,7 +22,7 @@ with st.sidebar:
     # Control the refresh state
     auto_refresh = st.checkbox("Live Auto-Refresh", value=True)
     refresh_rate = st.slider("Refresh Rate (seconds)", 1, 10, 5)
-    DATA_PATH = st.text_input("Data Source", "../stream_output/*.json")
+    DATA_PATH = st.text_input("Data Source", "/app/stream_output/*.json")
 
     if st.button("Manual Refresh"):
         st.rerun()

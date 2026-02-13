@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  zeek:
+    image: zeek/zeek:lts
+    container_name: nids_zeek
+    network_mode: "host"
+    volumes:
+      - ./logs/zeek:/zeek-logs
+      - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek
+    command: zeek -i eth0 local.zeek
+
+  spark-processor:
+    build: .
+    container_name: nids_spark
+    depends_on:
+      - zeek
+    volumes:
+      - ./logs/zeek:/app/zeek_logs
+      - ./logs/alerts:/app/stream_output
+    command: python scripts/realtime_processor.py
+
+  dashboard:
+    build: .
+    container_name: nids_dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./logs/alerts:/app/stream_output
+    command: streamlit run scripts/dashboard.py --server.address=0.0.0.0
