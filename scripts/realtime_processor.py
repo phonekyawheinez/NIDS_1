@@ -11,19 +11,19 @@ from itertools import chain
 # ============================================================================
 # 1. INITIALIZE SPARK (DOCKER OPTIMIZED)
 # ============================================================================
-# No need for manual ENV paths; Dockerfile handles JAVA_HOME and SPARK_HOME.
+# No need for manual ENV paths; Dockerfile.spark handles JAVA_HOME and SPARK_HOME.
+# 1. INITIALIZE SPARK
 spark = SparkSession.builder \
     .appName("NIDS_Zeek_Processor") \
     .config("spark.driver.memory", "1g") \
-    .config("spark.sql.shuffle.partitions", "2") \
+    .config("spark.sql.parquet.enableVectorizedReader", "false") \
+    .config("spark.sql.parquet.mergeSchema", "true") \
+    .config("spark.sql.legacy.parquet.nanosAsLong", "true") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("ERROR")
 
-# ============================================================================
 # 2. LOAD MODEL & LABELS
-# ============================================================================
-# In Docker, we map volumes to /app/saved_models
 BASE_DIR = "/app"
 MODEL_PATH = os.path.join(BASE_DIR, "saved_models", "nids_multiclass_model")
 LABELS_PATH = os.path.join(BASE_DIR, "saved_models", "label_mapping.json")
@@ -35,9 +35,12 @@ try:
     with open(LABELS_PATH, "r") as f:
         labels_list = json.load(f)
 
-    # Create label map for converting prediction index (0,1,2) to text ("Normal", "Exploit")
-    label_map = create_map([lit(x) for x in chain(*enumerate(labels_list))])
-    print("✓ Model loaded successfully.")
+    # Create the mapping dictionary for the UDF
+    label_dict = {float(i): label for i, label in enumerate(labels_list)}
+    # Define a UDF to map the numeric prediction to a string label
+    label_udf = udf(lambda x: label_dict.get(x, "Unknown"), StringType())
+
+    print("✓ Model and Label Mapping loaded successfully.")
 except Exception as e:
     print(f"❌ Error loading model: {e}")
     sys.exit(1)
@@ -73,7 +76,9 @@ input_df = spark.readStream \
     .format("json") \
     .schema(zeek_schema) \
     .option("maxFilesPerTrigger", 1) \
-    .load("/app/zeek_logs/")  # This folder is mounted in docker-compose
+    .option("latestFirst", "false") \
+    .load("/app/zeek_logs/")
+# This folder is mounted in docker-compose
 
 # ============================================================================
 # 5. FEATURE MAPPING (Zeek -> ML Model)
@@ -81,13 +86,13 @@ input_df = spark.readStream \
 # We map available Zeek columns to the features your model expects.
 # MISSING FEATURES are filled with 0 to prevent crashes.
 processed_df = input_df \
-    .withColumn("dur", col("duration").cast(FloatType())) \
-    .withColumn("sbytes", col("orig_bytes").cast(IntegerType())) \
-    .withColumn("dbytes", col("resp_bytes").cast(IntegerType())) \
-    .withColumn("spkts", col("orig_pkts").cast(IntegerType())) \
-    .withColumn("dpkts", col("resp_pkts").cast(IntegerType())) \
-    .withColumn("proto_str", col("proto")) \
-    .na.fill(0)  # Handle nulls if Zeek doesn't record bytes/duration
+    .withColumn("dur", col("duration").cast(DoubleType())) \
+    .withColumn("sbytes", col("orig_bytes").cast(LongType())) \
+    .withColumn("dbytes", col("resp_bytes").cast(LongType())) \
+    .withColumn("spkts", col("orig_pkts").cast(LongType())) \
+    .withColumn("dpkts", col("resp_pkts").cast(LongType())) \
+    .na.fill(0)
+# Handle nulls if Zeek doesn't record bytes/duration
 
 # Fill missing columns that the model expects but Zeek doesn't provide by default
 # (These would require a custom Zeek script to calculate)
@@ -99,25 +104,20 @@ missing_cols = [
 ]
 
 for c in missing_cols:
-    processed_df = processed_df.withColumn(c, lit(0).cast(IntegerType()))
+    processed_df = processed_df.withColumn(c, lit(0).cast(DoubleType())) # Cast to Double for ML safety
 
-# ============================================================================
 # 6. PREDICTION & OUTPUT
-# ============================================================================
-# Apply the model
+# Apply model transformations
 predictions = model.transform(processed_df)
 
-# Select columns for the Dashboard
-final_stream = predictions.select(
-    current_timestamp().alias("timestamp"),
-    col("id.orig_h").alias("src_ip"),
-    col("id.resp_h").alias("dst_ip"),
-    col("sbytes"),
-    col("dbytes"),
-    col("dur"),
-    # Map prediction index to human-readable string
-    label_map.getItem(col("prediction").cast("integer")).alias("attack_type")
-)
+final_stream = predictions.withColumn("attack_type", label_udf(col("prediction"))) \
+    .select(
+        current_timestamp().alias("timestamp"),
+        col("id.orig_h").alias("src_ip"),
+        col("id.resp_h").alias("dst_ip"),
+        col("proto"),
+        col("attack_type")
+    )
 
 # Output Setup
 output_path = "/app/stream_output"
@@ -138,12 +138,11 @@ if os.path.exists(checkpoint_path):
 
 print("🚀 Starting Stream Processing...")
 
-# Write results to JSON for the Dashboard to read
 query = final_stream.writeStream \
     .format("json") \
-    .option("path", output_path) \
-    .option("checkpointLocation", checkpoint_path) \
     .outputMode("append") \
+    .option("path", output_path) \
+    .option("checkpointLocation", "/app/stream_checkpoint") \
     .start()
 
 query.awaitTermination()

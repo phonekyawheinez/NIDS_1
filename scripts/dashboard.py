@@ -3,45 +3,51 @@ import pandas as pd
 import glob
 import plotly.express as px
 import time
+import os
 
 # --- 1. CONFIGURATION & PAGE SETUP ---
 st.set_page_config(
     page_title="NIDS Security Center",
-    page_icon="-",
+    page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # --- 2. SIDEBAR CONTROLS ---
 with st.sidebar:
-    st.title("NIDS Console")
+    st.title("🛡️ NIDS Console")
     st.success("System Active")
     st.divider()
 
     st.subheader("⚙️ Settings")
-    # Control the refresh state
     auto_refresh = st.checkbox("Live Auto-Refresh", value=True)
-    refresh_rate = st.slider("Refresh Rate (seconds)", 1, 10, 5)
-    DATA_PATH = st.text_input("Data Source", "/app/stream_output/*.json")
+    refresh_rate = st.slider("Refresh Rate (seconds)", 1, 10, 3)
+
+    # Path inside the Docker container
+    DATA_PATH = "/app/stream_output/*.json"
 
     if st.button("Manual Refresh"):
         st.rerun()
 
 
 # --- 3. DATA LOADING FUNCTION ---
-# We cache this lightly so it doesn't freeze the UI, but usually for live files we read fresh
-def load_data(path):
-    files = glob.glob(path)
+def load_data(path_pattern):
+    files = glob.glob(path_pattern)
+    # Filter out empty files or hidden Spark files (like metadata)
+    files = [f for f in files if os.path.getsize(f) > 0 and not f.endswith('.crc')]
+
     if not files:
         return pd.DataFrame()
 
     dfs = []
     for f in files:
         try:
-            # Try reading json; if a file is currently being written to, it might fail.
-            # We catch the error to prevent the dashboard from crashing.
-            dfs.append(pd.read_json(f, lines=True))
-        except ValueError:
+            # Spark JSON files are 'jsonlines' format
+            temp_df = pd.read_json(f, lines=True)
+            if not temp_df.empty:
+                dfs.append(temp_df)
+        except Exception:
+            # Skip files that are currently being locked/written by Spark
             continue
 
     if not dfs:
@@ -49,97 +55,87 @@ def load_data(path):
 
     df = pd.concat(dfs, ignore_index=True)
 
-    # Ensure timestamp is datetime
+    # Convert Spark timestamp string to datetime object
     if 'timestamp' in df.columns:
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df.sort_values('timestamp')
+        df = df.sort_values('timestamp', ascending=False)  # Latest first
 
     return df
 
 
 # --- 4. MAIN DASHBOARD LOGIC ---
 
-# Load Data
+st.title("🛰️ Real-Time Network Intrusion Detection")
+
 df = load_data(DATA_PATH)
 
-st.title("Network Intrusion Detection System")
-
 if df.empty:
-    st.warning("Waiting for data stream... No JSON files found in source path.")
+    st.info("🕒 **Waiting for Spark Stream...** Make sure `nids_spark` is running and Zeek is generating traffic.")
+    st.caption(f"Searching for JSON files in: {DATA_PATH}")
 else:
     # -- CALCULATIONS --
-    total_pkts = len(df)
+    total_events = len(df)
+    # Ensure 'attack_type' column exists (Spark might not have written it yet)
+    if 'attack_type' not in df.columns:
+        df['attack_type'] = 'Processing...'
+
     attacks = df[df['attack_type'] != 'Normal']
     atk_count = len(attacks)
-    clean_count = total_pkts - atk_count
-    threat_level = (atk_count / total_pkts) * 100 if total_pkts > 0 else 0
+    clean_count = total_events - atk_count
+    threat_level = (atk_count / total_events) * 100 if total_events > 0 else 0
 
     # -- KPI ROW --
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("TOTAL PACKETS", f"{total_pkts:,}")
+    col1.metric("TOTAL EVENTS", f"{total_events:,}")
     col2.metric("CLEAN TRAFFIC", f"{clean_count:,}")
-    col3.metric("ATTACKS", atk_count, delta=atk_count if atk_count > 0 else None, delta_color="inverse")
+    col3.metric("ATTACKS DETECTED", atk_count, delta=f"{atk_count} new" if atk_count > 0 else None,
+                delta_color="inverse")
     col4.metric("THREAT LEVEL", f"{threat_level:.1f}%")
 
     # -- ALERTS SECTION --
     if atk_count > 0:
-        latest_atk = attacks.iloc[-1]
+        latest_atk = attacks.iloc[0]  # Using index 0 because we sorted by latest first
         st.error(
             f"🚨 **CRITICAL ALERT:** {latest_atk['attack_type']} detected! "
-            f"Protocol: {latest_atk.get('proto', 'TCP')} | "
-            f"Source: {latest_atk.get('src_ip', 'Unknown')}"
+            f"| Source: {latest_atk.get('src_ip', 'Unknown')} "
+            f"| Target: {latest_atk.get('dst_ip', 'Unknown')}"
         )
     else:
-        st.success("✅ NETWORK SECURE: No active threats detected.")
+        st.success("✅ **NETWORK SECURE:** Monitoring incoming traffic from Zeek.")
 
     # -- CHARTS ROW --
     c1, c2 = st.columns([2, 1])
 
     with c1:
-        # Time Series Chart
         if 'timestamp' in df.columns:
-            # Resample to 1 second intervals for the chart
-            df_time = df.set_index('timestamp').resample('1s').size().reset_index(name='packets')
-
-            fig_line = px.area(
-                df_time, x='timestamp', y='packets',
-                title="Real-Time Traffic Volume",
-                color_discrete_sequence=['#00CC96']
-            )
-            fig_line.update_layout(height=350, template="plotly_dark")
-            # Unique key prevents rendering issues
-            st.plotly_chart(fig_line, width= "content", key=f"line_{time.time()}")
+            # Resample traffic to see volume over time
+            df_time = df.set_index('timestamp').resample('5s').size().reset_index(name='packets')
+            fig_line = px.line(df_time, x='timestamp', y='packets', title="Traffic Throughput (5s window)")
+            fig_line.update_traces(line_color='#00CC96', fill='tozeroy')
+            fig_line.update_layout(template="plotly_dark", height=300)
+            st.plotly_chart(fig_line, use_container_width=True)
 
     with c2:
-        # Pie Chart
         counts = df['attack_type'].value_counts()
-        fig_pie = px.pie(
-            values=counts.values, names=counts.index,
-            title="Threat Distribution",
-            hole=0.4,
-            color_discrete_sequence=px.colors.sequential.RdBu_r
-        )
-        fig_pie.update_layout(height=350, template="plotly_dark", showlegend=False)
-        st.plotly_chart(fig_pie, width= "content", key=f"pie_{time.time()}")
+        fig_pie = px.pie(values=counts.values, names=counts.index, title="Threat Mix", hole=0.4)
+        fig_pie.update_layout(template="plotly_dark", height=300, showlegend=False)
+        st.plotly_chart(fig_pie, use_container_width=True)
 
     # -- DATA TABLE --
-    st.subheader("Live Packet Log")
+    st.subheader("📝 Live Detection Logs")
 
-    # Select specific columns to display
-    display_cols = ['timestamp', 'src_ip', 'dst_ip', 'proto', 'length', 'attack_type']
-    # Filter only columns that exist in the dataframe
-    actual_cols = [c for c in display_cols if c in df.columns]
+    # Selecting columns based on what your Spark script actually outputs
+    display_cols = ['timestamp', 'src_ip', 'dst_ip', 'attack_type']
+    available_cols = [c for c in display_cols if c in df.columns]
 
 
-    # Styling function for the table
     def style_threats(val):
-        color = '#ff4b4b' if val != 'Normal' else '#21c354'
-        return f'color: {color}'
+        return 'color: #ff4b4b; font-weight: bold' if val != 'Normal' else 'color: #21c354'
 
 
     st.dataframe(
-        df.tail(15)[actual_cols].style.map(style_threats, subset=['attack_type']),
-        width="content",
+        df[available_cols].head(20).style.map(style_threats, subset=['attack_type']),
+        use_container_width=True,
         hide_index=True
     )
 

@@ -1,0 +1,9 @@
+FROM python:3.11-slim-bookworm
+
+WORKDIR /app
+COPY requirements.txt .
+# Install only what's needed for the UI
+RUN pip install --no-cache-dir streamlit pandas matplotlib plotly
+
+COPY scripts/dashboard.py ./scripts/
+# We don't need saved_models or Java here

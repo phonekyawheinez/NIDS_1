@@ -8,10 +8,13 @@ services:
     volumes:
       - ./logs/zeek:/zeek-logs
       - ./zeek/local.zeek:/usr/local/zeek/share/zeek/site/local.zeek
+    # IMPORTANT: Ensure eth0 matches your actual interface (use 'ip addr' to check)
     command: zeek -i eth0 local.zeek
 
   spark-processor:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
     container_name: nids_spark
     depends_on:
       - zeek
@@ -19,9 +22,16 @@ services:
       - ./logs/zeek:/app/zeek_logs
       - ./logs/alerts:/app/stream_output
     command: python scripts/realtime_processor.py
+    environment:
+      - JAVA_HOME=/opt/java/openjdk
+      - SPARK_HOME=/opt/spark
+      # ADD THESE LINE BELOW:
+      - JAVA_OPTS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED
 
   dashboard:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
     container_name: nids_dashboard
     ports:
       - "8501:8501"

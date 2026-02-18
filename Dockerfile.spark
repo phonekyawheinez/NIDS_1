@@ -1,0 +1,49 @@
+# --- STAGE 1: Java Provider ---
+# We use the JDK image to pull the Java binaries
+FROM eclipse-temurin:17-jdk-jammy AS java_provider
+
+# --- STAGE 2: Spark Downloader ---
+# We use Alpine to download and extract Spark (very small image)
+FROM alpine:latest AS spark_downloader
+# Install curl and tar to handle the download
+RUN apk add --no-cache curl tar
+# Download Spark 3.5.1
+RUN curl -L https://archive.apache.org/dist/spark/spark-3.5.1/spark-3.5.1-bin-hadoop3.tgz -o spark.tgz \
+    && tar -xzf spark.tgz \
+    && mv spark-3.5.1-bin-hadoop3 /opt/spark
+
+# --- STAGE 3: Final Runtime ---
+# This is the actual image that will run your code
+FROM python:3.11-slim-bookworm
+
+# 1. Setup Java from Stage 1
+ENV JAVA_HOME=/opt/java/openjdk
+COPY --from=java_provider $JAVA_HOME $JAVA_HOME
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# 2. Setup Spark from Stage 2
+ENV SPARK_HOME=/opt/spark
+COPY --from=spark_downloader $SPARK_HOME $SPARK_HOME
+ENV PATH="${SPARK_HOME}/bin:${PATH}"
+
+# 3. PySpark Environment Variables
+ENV PYSPARK_PYTHON=python3
+ENV PYSPARK_SUBMIT_ARGS="--master local[*] pyspark-shell"
+
+WORKDIR /app
+
+# 4. Install Python Dependencies
+# We copy only requirements first to leverage Docker's cache
+COPY requirements.spark.txt ./requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir -r requirements.txt
+
+# 5. Copy Application Files
+COPY scripts/ ./scripts/
+COPY saved_models/ ./saved_models/
+
+# Create necessary directories for the volumes
+RUN mkdir -p /app/zeek_logs /app/stream_output /app/stream_checkpoint
+
+# The command to run your processor
+CMD ["python", "scripts/realtime_processor.py"]
